@@ -6,6 +6,8 @@ import groovy.io.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.regex.Matcher
@@ -20,8 +22,11 @@ class TextScan {
     String pattern
     boolean regex
     Pattern compiledPattern
+    int extraErrors = 0
 
     boolean run() {
+        Instant start = Instant.now()
+
         if (!isDirValid(rootDir)) {
             System.err.println "Error: '${rootDir}' does not exist, is not a directory, or is not readable."
             return false
@@ -31,6 +36,9 @@ class TextScan {
 
         List results = scan()
         report(results)
+        summary(results)
+
+        log('INFO', "End: finished in ${formatDuration(Duration.between(start, Instant.now()))}")
         return true
     }
 
@@ -119,6 +127,17 @@ class TextScan {
         }
     }
 
+    void summary(List results) {
+        int scanned = results.size()
+        int matched = results.count { it.hits }
+        int totalHits = results.sum(0) { it.hits }
+        int errors = results.count { it.error } + extraErrors
+
+        log(errors ? 'WARN' : 'INFO',
+            "Summary: ${scanned} ${plural(scanned, 'file')} scanned, ${matched} matched, " +
+            "${totalHits} total ${plural(totalHits, 'hit')}, ${errors} ${plural(errors, 'error')}")
+    }
+
     void log(String level, String message) {
         String line = "${LocalDateTime.now().format(LOG_TIME)} ${level.padRight(5)} ${message}"
         if (level == 'INFO') {
@@ -135,6 +154,10 @@ class TextScan {
     static String lineLabel(List lines) {
         List numbers = lines*.line
         return "${numbers.size() == 1 ? 'line' : 'lines'} ${numbers.join(', ')}"
+    }
+
+    static String formatDuration(Duration d) {
+        return String.format('%.3f s', d.toMillis() / 1000.0)
     }
 
     static void main(String[] args) {
