@@ -83,7 +83,8 @@ The first run downloads Picocli through `@Grab`, so it needs internet access onc
 Requires [Docker](https://docs.docker.com/get-docker/) to be installed and running. No JDK or Groovy needed.
 
 ```bash
-chmod +x textscan-docker.sh
+chmod +x setup-test-env.sh textscan-docker.sh
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello"
 ```
 
