@@ -1,15 +1,22 @@
 @GrabConfig(systemClassLoader = true)
 @Grab('info.picocli:picocli:4.7.6')
 import groovy.cli.picocli.CliBuilder
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 
 class TextScan {
     String rootDir
     String pattern
     boolean regex
+    Pattern compiledPattern
 
     boolean run() {
         println "CLI parsed successfully: dir=${rootDir}, pattern=${pattern}, regex=${regex}"
         return true
+    }
+	
+    static Pattern buildPattern(String text, boolean asRegex) {
+        return asRegex ? Pattern.compile(text) : Pattern.compile(Pattern.quote(text))
     }
 
     static void main(String[] args) {
@@ -24,8 +31,23 @@ class TextScan {
 
         if (options.h) {
             cli.usage()
-            System.exit(0)
+            System.exit(0)    
         }
+
+	Pattern compiled
+	try {
+            compiled = buildPattern(options.p, options.regex)
+        } catch (PatternSyntaxException e) {
+ 	    System.err.println "Error: invalid regex '${options.p}': ${e.description}"
+            cli.usage()
+            System.exit(1)	
+        }
+	
+	if (compiled.matcher('').find()) {
+	    System.err.println "Error: pattern '${options.p}' matches empty text; make it match at least one character."
+	    cli.usage()
+ 	    System.exit(1)
+	}
 
         TextScan textScan = new TextScan(
             rootDir: options.d,
