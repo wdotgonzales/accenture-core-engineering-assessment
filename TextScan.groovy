@@ -3,9 +3,11 @@
 import groovy.cli.picocli.CliBuilder
 import groovy.io.FileType
 import groovy.io.FileVisitResult
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
@@ -21,6 +23,7 @@ class TextScan {
     String rootDir
     String pattern
     boolean regex
+    String reportFile
     Pattern compiledPattern
     int extraErrors = 0
 
@@ -32,12 +35,20 @@ class TextScan {
             return false
         }
 
+        String outputProblem = validateOutputs()
+        if (outputProblem) {
+            System.err.println "Error: ${outputProblem}"
+            return false
+        }
+
         log('INFO', "Start: scanning ${rootDir} for \"${pattern}\" (${regex ? 'regex' : 'literal'} mode)")
 
         List results = scan()
         report(results)
-        summary(results)
 
+        if (reportFile) { writeReport(results) }
+
+        summary(results)
         log('INFO', "End: finished in ${formatDuration(Duration.between(start, Instant.now()))}")
         return true
     }
@@ -50,6 +61,51 @@ class TextScan {
         if (!path) { return false }
         def dir = new File(path)
         return dir.isDirectory() && dir.canRead()
+    }
+
+    String validateOutputs() {
+        if (reportFile) {
+            Path report = Paths.get(reportFile).toAbsolutePath().normalize()
+            if (Files.isDirectory(report)) {
+                return "--report '${reportFile}' is a folder; give a file path."
+            }
+            Path parent = report.parent
+            if (Files.exists(parent) && !Files.isWritable(parent)) {
+                return "cannot write the report into '${parent}'."
+            }
+        }
+        return null
+    }
+
+    void writeReport(List results) {
+        Path target = Paths.get(reportFile).toAbsolutePath().normalize()
+        Path temp = null
+        try {
+            Files.createDirectories(target.parent)
+            temp = Files.createTempFile(target.parent, '.textscan-', '.tmp')
+
+            String nl = System.lineSeparator()
+            temp.toFile().withWriter(CHARSET) { Writer w ->
+                w << "TextScan report${nl}"
+                w << "Folder: ${rootDir}${nl}"
+                w << "Pattern: ${pattern} (${regex ? 'regex' : 'literal'})${nl}"
+                w << "Generated: ${LocalDateTime.now().format(LOG_TIME)}${nl}${nl}"
+                results.findAll { it.hits }.each { r ->
+                    w << "${r.file}\t${r.hits} ${plural(r.hits, 'hit')}\t${lineLabel(r.lines)}${nl}"
+                }
+            }
+
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+            log('INFO', "Report written to ${reportFile}")
+        } catch (Exception e) {
+            extraErrors++
+            log('ERROR', "Could not write report '${reportFile}': ${e.message}")
+            if (temp != null) { Files.deleteIfExists(temp) }
+        }
     }
 
     Map searchFile(File file) {
@@ -78,6 +134,8 @@ class TextScan {
 
     List scan() {
         Path root = Paths.get(rootDir).toAbsolutePath().normalize()
+        Path reportPath = reportFile ? Paths.get(reportFile).toAbsolutePath().normalize() : null
+
         List files = []
 
         root.toFile().traverse(
@@ -92,7 +150,8 @@ class TextScan {
             }
         ) { File file ->
             Path filePath = file.toPath()
-            if (!file.name.startsWith('.') && !Files.isSymbolicLink(filePath)) {
+            if (!file.name.startsWith('.') && !Files.isSymbolicLink(filePath) &&
+                    filePath.toAbsolutePath().normalize() != reportPath) {
                 files << file
             }
         }
@@ -165,6 +224,7 @@ class TextScan {
         cli.d(names: ['-d', '--dir'], args: 1, required: true, argName: 'directory', 'Folder to scan')
         cli.p(names: ['-p', '--pattern'], args: 1, required: true, argName: 'pattern', 'Text to search for')
         cli.r(names: ['-r', '--regex'], 'Treat the pattern as a regular expression')
+        cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of matched files to this file')
         cli.h(names: ['-h', '--help'], usageHelp: true, 'Show this help and exit')
 
         def options = cli.parse(args)
@@ -194,6 +254,7 @@ class TextScan {
             rootDir: options.d,
             pattern: options.p,
             regex: options.regex ?: false,
+            reportFile: options.report ?: null,
             compiledPattern: compiled
         )
 
