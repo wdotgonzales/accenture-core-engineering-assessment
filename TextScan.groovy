@@ -11,12 +11,23 @@ class TextScan {
     Pattern compiledPattern
 
     boolean run() {
-        println "CLI parsed successfully: dir=${rootDir}, pattern=${pattern}, regex=${regex}"
+	if (!isDirValid(rootDir)) {
+            System.err.println "Error: '${rootDir}' does not exist, is not a directory, or is not readable."
+            return false
+        }
+
+	println "Directory check passed for ${rootDir}"
         return true
     }
 	
     static Pattern buildPattern(String text, boolean asRegex) {
         return asRegex ? Pattern.compile(text) : Pattern.compile(Pattern.quote(text))
+    }
+    
+    boolean isDirValid(String path) {
+        if (!path) { return false }
+        def dir = new File(path)
+        return dir.isDirectory() && dir.canRead()
     }
 
     static void main(String[] args) {
