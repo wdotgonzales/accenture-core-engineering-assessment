@@ -19,11 +19,13 @@ import java.util.regex.PatternSyntaxException
 class TextScan {
     static final String CHARSET = 'UTF-8'
     static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm:ss.SSS')
+    static final DateTimeFormatter FOLDER_TIME = DateTimeFormatter.ofPattern('yyyyMMdd-HHmmss')
 
     String rootDir
     String pattern
     boolean regex
     String reportFile
+    String archiveDir
     Pattern compiledPattern
     int extraErrors = 0
 
@@ -47,6 +49,7 @@ class TextScan {
         report(results)
 
         if (reportFile) { writeReport(results) }
+        if (archiveDir) { archive(results) }
 
         summary(results)
         log('INFO', "End: finished in ${formatDuration(Duration.between(start, Instant.now()))}")
@@ -72,6 +75,15 @@ class TextScan {
             Path parent = report.parent
             if (Files.exists(parent) && !Files.isWritable(parent)) {
                 return "cannot write the report into '${parent}'."
+            }
+        }
+        if (archiveDir) {
+            Path archive = Paths.get(archiveDir).toAbsolutePath().normalize()
+            if (Files.exists(archive) && !Files.isDirectory(archive)) {
+                return "--archive '${archiveDir}' exists and is not a folder."
+            }
+            if (Files.exists(archive) && !Files.isWritable(archive)) {
+                return "cannot write into the archive folder '${archiveDir}'."
             }
         }
         return null
@@ -108,6 +120,43 @@ class TextScan {
         }
     }
 
+    void archive(List results) {
+        List matched = results.findAll { it.hits }
+        if (!matched) {
+            log('INFO', 'Archive skipped: no matched files to copy')
+            return
+        }
+
+        Path root = Paths.get(rootDir).toAbsolutePath().normalize()
+        Path runFolder = newArchiveFolder()
+        int copied = 0
+
+        matched.each { r ->
+            try {
+                Path target = runFolder.resolve(r.relPath)
+                Files.createDirectories(target.parent)
+                Files.copy(root.resolve(r.relPath), target, StandardCopyOption.COPY_ATTRIBUTES)
+                copied++
+            } catch (Exception e) {
+                extraErrors++
+                log('ERROR', "Could not archive ${r.file}: ${e.message}")
+            }
+        }
+        log('INFO', "Archived ${copied} ${plural(copied, 'file')} to ${runFolder}")
+    }
+
+    Path newArchiveFolder() {
+        Path base = Paths.get(archiveDir).toAbsolutePath().normalize()
+        String name = "textscan-${LocalDateTime.now().format(FOLDER_TIME)}"
+        Path folder = base.resolve(name)
+        int n = 2
+        while (Files.exists(folder)) {
+            folder = base.resolve("${name}-${n++}".toString())
+        }
+        Files.createDirectories(folder)
+        return folder
+    }
+
     Map searchFile(File file) {
         int count = 0
         List lines = []
@@ -134,6 +183,7 @@ class TextScan {
 
     List scan() {
         Path root = Paths.get(rootDir).toAbsolutePath().normalize()
+        Path archiveRoot = archiveDir ? Paths.get(archiveDir).toAbsolutePath().normalize() : null
         Path reportPath = reportFile ? Paths.get(reportFile).toAbsolutePath().normalize() : null
 
         List files = []
@@ -143,7 +193,8 @@ class TextScan {
             nameFilter: ~/.*\.txt$/,
             preDir: { File dir ->
                 Path dirPath = dir.toPath()
-                if (dir.name.startsWith('.') || Files.isSymbolicLink(dirPath)) {
+                if (dir.name.startsWith('.') || Files.isSymbolicLink(dirPath) ||
+                        (archiveRoot != null && dirPath.toAbsolutePath().normalize() == archiveRoot)) {
                     return FileVisitResult.SKIP_SUBTREE
                 }
                 return FileVisitResult.CONTINUE
@@ -225,6 +276,7 @@ class TextScan {
         cli.p(names: ['-p', '--pattern'], args: 1, required: true, argName: 'pattern', 'Text to search for')
         cli.r(names: ['-r', '--regex'], 'Treat the pattern as a regular expression')
         cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of matched files to this file')
+        cli._(names: ['--archive'], args: 1, argName: 'directory', 'Copy matched files into this folder')
         cli.h(names: ['-h', '--help'], usageHelp: true, 'Show this help and exit')
 
         def options = cli.parse(args)
@@ -255,6 +307,7 @@ class TextScan {
             pattern: options.p,
             regex: options.regex ?: false,
             reportFile: options.report ?: null,
+            archiveDir: options.archive ?: null,
             compiledPattern: compiled
         )
 
