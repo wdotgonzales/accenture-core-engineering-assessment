@@ -6,12 +6,15 @@ import groovy.io.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
 
 class TextScan {
     static final String CHARSET = 'UTF-8'
+    static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm:ss.SSS')
 
     String rootDir
     String pattern
@@ -24,15 +27,10 @@ class TextScan {
             return false
         }
 
-        println "Directory check passed for ${rootDir}"
-        List scannedFiles = scan()
-        println "Scan complete. Discovered ${scannedFiles.size()} text file(s):"
-        scannedFiles.each { r ->
-            println "  - ${r.file} (Hits: ${r.hits}, Lines: ${r.lines.size()})"
-            r.lines.each { l ->
-                println "      Line ${l.line}, Col ${l.columns}: ${l.preview}"
-            }
-        }
+        log('INFO', "Start: scanning ${rootDir} for \"${pattern}\" (${regex ? 'regex' : 'literal'} mode)")
+
+        List results = scan()
+        report(results)
         return true
     }
 
@@ -46,9 +44,6 @@ class TextScan {
         return dir.isDirectory() && dir.canRead()
     }
 
-    /**
-     * Searches one file line by line and returns total hits and matching line details.
-     */
     Map searchFile(File file) {
         int count = 0
         List lines = []
@@ -107,6 +102,39 @@ class TextScan {
             }
             return result
         }.sort { it.file }
+    }
+
+    void report(List results) {
+        results.each { r ->
+            if (r.error) {
+                log('ERROR', "${r.file} -> could not read: ${r.error}")
+            } else if (r.hits) {
+                log('INFO', "${r.file} -> ${r.hits} ${plural(r.hits, 'hit')} (${lineLabel(r.lines)})")
+                r.lines.each { l ->
+                    log('INFO', "    line ${l.line}, col ${l.columns.join(', ')}: ${l.preview}")
+                }
+            } else {
+                log('INFO', "${r.file} -> (no match)")
+            }
+        }
+    }
+
+    void log(String level, String message) {
+        String line = "${LocalDateTime.now().format(LOG_TIME)} ${level.padRight(5)} ${message}"
+        if (level == 'INFO') {
+            println line
+        } else {
+            System.err.println line
+        }
+    }
+
+    static String plural(int n, String word) {
+        return n == 1 ? word : "${word}s"
+    }
+
+    static String lineLabel(List lines) {
+        List numbers = lines*.line
+        return "${numbers.size() == 1 ? 'line' : 'lines'} ${numbers.join(', ')}"
     }
 
     static void main(String[] args) {
