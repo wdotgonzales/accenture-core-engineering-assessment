@@ -16,8 +16,15 @@ import java.util.regex.Matcher
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
 
+/**
+ * Text scanner that looks through a folder and its subfolders for a word or regex pattern,
+ * prints the matches, and can optionally save a report file or backup archive.
+ */
 class TextScan {
+    // Always read files as UTF-8 so character encoding doesn't break
     static final String CHARSET = 'UTF-8'
+    
+    // Date formats for logs and archive folders
     static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm:ss.SSS')
     static final DateTimeFormatter FOLDER_TIME = DateTimeFormatter.ofPattern('yyyyMMdd-HHmmss')
 
@@ -26,17 +33,27 @@ class TextScan {
     boolean regex
     String reportFile
     String archiveDir
+    
+    // Compile the pattern once so we don't recompile it for every file/line
     Pattern compiledPattern
+
+    // Track errors that happen outside of file scanning, like report writing failures
     int extraErrors = 0
 
+    /**
+     * Main run method. Checks inputs, scans files, prints results,
+     * and handles optional report generation and archiving.
+     */
     boolean run() {
         Instant start = Instant.now()
 
+        // Check if the root directory exists and is readable
         if (!isDirValid(rootDir)) {
-            System.err.println "Error: '${rootDir}' does not exist, is not a directory, or is not readable."
+            System.err.println "Error: '${rootDir}' does not exist, is not a directory, or cannot be read."
             return false
         }
 
+        // Check output file and folder paths before scanning
         String outputProblem = validateOutputs()
         if (outputProblem) {
             System.err.println "Error: ${outputProblem}"
@@ -45,36 +62,49 @@ class TextScan {
 
         log('INFO', "Start: scanning ${rootDir} for \"${pattern}\" (${regex ? 'regex' : 'literal'} mode)")
 
+        // Scan files and print report
         List results = scan()
         report(results)
 
+        // Write report or archive if requested
         if (reportFile) { writeReport(results) }
         if (archiveDir) { archive(results) }
 
+        // Print final summary and elapsed time
         summary(results)
         log('INFO', "End: finished in ${formatDuration(Duration.between(start, Instant.now()))}")
         return true
     }
 
+    /**
+     * Compiles search text into a Pattern. 
+     * Uses Pattern.quote for literal mode so special characters don't break regex.
+     */
     static Pattern buildPattern(String text, boolean asRegex) {
         return asRegex ? Pattern.compile(text) : Pattern.compile(Pattern.quote(text))
     }
 
+    /**
+     * Checks if a path is a valid and readable directory.
+     */
     boolean isDirValid(String path) {
         if (!path) { return false }
         def dir = new File(path)
         return dir.isDirectory() && dir.canRead()
     }
 
+    /**
+     * Validates report and archive paths to prevent errors later.
+     */
     String validateOutputs() {
         if (reportFile) {
             Path report = Paths.get(reportFile).toAbsolutePath().normalize()
             if (Files.isDirectory(report)) {
-                return "--report '${reportFile}' is a folder; give a file path."
+                return "--report '${reportFile}' is a folder; please provide a file path."
             }
             Path parent = report.parent
             if (Files.exists(parent) && !Files.isWritable(parent)) {
-                return "cannot write the report into '${parent}'."
+                return "Cannot write the report into '${parent}'."
             }
         }
         if (archiveDir) {
@@ -83,12 +113,15 @@ class TextScan {
                 return "--archive '${archiveDir}' exists and is not a folder."
             }
             if (Files.exists(archive) && !Files.isWritable(archive)) {
-                return "cannot write into the archive folder '${archiveDir}'."
+                return "Cannot write into the archive folder '${archiveDir}'."
             }
         }
         return null
     }
 
+    /**
+     * Writes matched file details to the report file using a temp file for safety.
+     */
     void writeReport(List results) {
         Path target = Paths.get(reportFile).toAbsolutePath().normalize()
         Path temp = null
@@ -120,10 +153,13 @@ class TextScan {
         }
     }
 
+    /**
+     * Copies matched files into a timestamped folder, preserving folder structure.
+     */
     void archive(List results) {
         List matched = results.findAll { it.hits }
         if (!matched) {
-            log('INFO', 'Archive skipped: no matched files to copy')
+            log('INFO', 'Archive skipped: no matched files to copy.')
             return
         }
 
@@ -145,6 +181,9 @@ class TextScan {
         log('INFO', "Archived ${copied} ${plural(copied, 'file')} to ${runFolder}")
     }
 
+    /**
+     * Creates a unique archive folder based on the current timestamp.
+     */
     Path newArchiveFolder() {
         Path base = Paths.get(archiveDir).toAbsolutePath().normalize()
         String name = "textscan-${LocalDateTime.now().format(FOLDER_TIME)}"
@@ -157,6 +196,9 @@ class TextScan {
         return folder
     }
 
+    /**
+     * Reads a single file line by line to save memory, finding matches and formatting previews.
+     */
     Map searchFile(File file) {
         int count = 0
         List lines = []
@@ -181,6 +223,9 @@ class TextScan {
         return [count: count, lines: lines]
     }
 
+    /**
+     * Walks through the directory tree to find text files while ignoring hidden files, symlinks, and reports.
+     */
     List scan() {
         Path root = Paths.get(rootDir).toAbsolutePath().normalize()
         Path archiveRoot = archiveDir ? Paths.get(archiveDir).toAbsolutePath().normalize() : null
@@ -222,10 +267,13 @@ class TextScan {
         }.sort { it.file }
     }
 
+    /**
+     * Prints search results to the console.
+     */
     void report(List results) {
         results.each { r ->
             if (r.error) {
-                log('ERROR', "${r.file} -> could not read: ${r.error}")
+                log('ERROR', "${r.file} -> could not read file: ${r.error}")
             } else if (r.hits) {
                 log('INFO', "${r.file} -> ${r.hits} ${plural(r.hits, 'hit')} (${lineLabel(r.lines)})")
                 r.lines.each { l ->
@@ -237,6 +285,9 @@ class TextScan {
         }
     }
 
+    /**
+     * Prints a summary of files scanned, matches found, and total errors.
+     */
     void summary(List results) {
         int scanned = results.size()
         int matched = results.count { it.hits }
@@ -248,6 +299,9 @@ class TextScan {
             "${totalHits} total ${plural(totalHits, 'hit')}, ${errors} ${plural(errors, 'error')}")
     }
 
+    /**
+     * Simple logging helper with timestamps. Info goes to stdout, warnings/errors go to stderr.
+     */
     void log(String level, String message) {
         String line = "${LocalDateTime.now().format(LOG_TIME)} ${level.padRight(5)} ${message}"
         if (level == 'INFO') {
@@ -270,6 +324,9 @@ class TextScan {
         return String.format('%.3f s', d.toMillis() / 1000.0)
     }
 
+    /**
+     * Entry point. Parses arguments using Picocli and starts the scan.
+     */
     static void main(String[] args) {
         def cli = new CliBuilder(usage: 'groovy TextScan.groovy -d <directory> -p <pattern> [options]')
         cli.d(names: ['-d', '--dir'], args: 1, required: true, argName: 'directory', 'Folder to scan')
@@ -296,6 +353,7 @@ class TextScan {
             System.exit(1)
         }
 
+        // Prevent empty-matching patterns to avoid infinite loops
         if (compiled.matcher('').find()) {
             System.err.println "Error: pattern '${options.p}' matches empty text."
             cli.usage()
