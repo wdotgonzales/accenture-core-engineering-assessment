@@ -6,10 +6,13 @@ import groovy.io.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.regex.Matcher
 import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
 
 class TextScan {
+    static final String CHARSET = 'UTF-8'
+
     String rootDir
     String pattern
     boolean regex
@@ -23,8 +26,13 @@ class TextScan {
 
         println "Directory check passed for ${rootDir}"
         List scannedFiles = scan()
-        println "Discovered ${scannedFiles.size()} text file(s):"
-        scannedFiles.each { println "  - ${it.file}" }
+        println "Scan complete. Discovered ${scannedFiles.size()} text file(s):"
+        scannedFiles.each { r ->
+            println "  - ${r.file} (Hits: ${r.hits}, Lines: ${r.lines.size()})"
+            r.lines.each { l ->
+                println "      Line ${l.line}, Col ${l.columns}: ${l.preview}"
+            }
+        }
         return true
     }
 
@@ -36,6 +44,33 @@ class TextScan {
         if (!path) { return false }
         def dir = new File(path)
         return dir.isDirectory() && dir.canRead()
+    }
+
+    /**
+     * Searches one file line by line and returns total hits and matching line details.
+     */
+    Map searchFile(File file) {
+        int count = 0
+        List lines = []
+
+        file.eachLine(CHARSET) { String line, int lineNumber ->
+            Matcher m = compiledPattern.matcher(line)
+            StringBuilder preview = new StringBuilder()
+            List columns = []
+
+            while (m.find()) {
+                columns << m.start() + 1
+                m.appendReplacement(preview, Matcher.quoteReplacement("[[${m.group()}]]".toString()))
+            }
+
+            if (columns) {
+                m.appendTail(preview)
+                count += columns.size()
+                lines << [line: lineNumber, columns: columns, preview: preview.toString()]
+            }
+        }
+
+        return [count: count, lines: lines]
     }
 
     List scan() {
@@ -61,7 +96,16 @@ class TextScan {
 
         return files.collect { File file ->
             Path relPath = root.relativize(file.toPath().toAbsolutePath().normalize())
-            return [file: relPath.toString(), relPath: relPath, hits: 0, lines: [], error: null]
+            Map result = [file: relPath.toString(), relPath: relPath, hits: 0, lines: [], error: null]
+
+            try {
+                Map found = searchFile(file)
+                result.hits = found.count
+                result.lines = found.lines
+            } catch (Exception e) {
+                result.error = e.message ?: e.class.simpleName
+            }
+            return result
         }.sort { it.file }
     }
 
