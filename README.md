@@ -97,13 +97,14 @@ groovy TextScan.groovy -d <directory> -p <pattern> [-n <new text>] [options]
 
 Timestamps and the elapsed time in the output will be different on every run.
 
-> Examples 1 to 3 only search, so they are safe to run in any order. Examples 4 to 8 use `-n` and change the test files. Run `./setup-test-env.sh` again to reset them before trying the next one.
+> Examples 4 to 8 use `-n` and change the test files. Every example below starts with `./setup-test-env.sh`, which resets the test files, so you can run them in any order and get the results described.
 
 #### 1. Search only (literal)
 
 Looks for the exact word `Hello` in every `.txt` file under `testscan_dir`. You should get 5 hits across 3 files. No file is changed.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello"
 ```
 
@@ -112,6 +113,7 @@ groovy TextScan.groovy -d testscan_dir -p "Hello"
 Same search, but with `-r` so the pattern is read as a regex. `H[a-z]+` matches any word starting with `H` followed by lowercase letters, which here is still just `Hello`.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "H[a-z]+" -r
 ```
 
@@ -120,6 +122,7 @@ groovy TextScan.groovy -d testscan_dir -p "H[a-z]+" -r
 Without `-n`, `--report` lists the matched files with their hit counts and line numbers, and `--archive` copies the matched files into a timestamped folder. No file is changed.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello" --report report.txt
 groovy TextScan.groovy -d testscan_dir -p "Hello" --archive ./backups
 ```
@@ -129,18 +132,21 @@ groovy TextScan.groovy -d testscan_dir -p "Hello" --archive ./backups
 Adds `-n` to replace every `Hello` with `Hi`. You should get 5 replacements across 3 files.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi"
 ```
 
 #### 5. Regex replace
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "H[a-z]+" -r -n "Hi"
 ```
 
 With a capture group (use single quotes so the shell doesn't expand `$1`). This turns `Hello` into `Hi`:
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "(H)ello" -r -n '$1i'
 ```
 
@@ -149,6 +155,7 @@ groovy TextScan.groovy -d testscan_dir -p "(H)ello" -r -n '$1i'
 Runs the replace and saves the modified files, with their replacement counts and line numbers, to `report.txt`.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --report report.txt
 ```
 
@@ -157,12 +164,14 @@ groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --report report.txt
 Copies the original files into a new timestamped folder under `./backups` (keeping their folder structure) before changing them. Every run makes a new folder, so older backups are never overwritten.
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --archive ./backups
 ```
 
 #### 8. Everything together
 
 ```bash
+./setup-test-env.sh
 groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --archive ./backups --report report.txt
 ```
 
@@ -190,29 +199,33 @@ The first run builds the image, which takes about a minute. After that it starts
 
 You might see `WARNING: Using incubator modules: jdk.incubator.foreign, jdk.incubator.vector` before the output. It's harmless and comes from the Java version inside the image.
 
-> Examples 1 and 2 only search. Examples 3 to 7 use `-n` and change the test files. Run `./setup-test-env.sh` again to reset them.
+> Examples 3 to 7 use `-n` and change the test files. Every example below starts with `./setup-test-env.sh`, which resets the test files, so you can run them in any order and get the results described.
 
 #### 1. Search only (literal)
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello"
 ```
 
 #### 2. Search only (regex)
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "H[a-z]+" -r
 ```
 
 #### 3. Literal replace
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi"
 ```
 
 #### 4. Regex replace
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "H[a-z]+" -r -n "Hi"
 ```
 
@@ -221,6 +234,7 @@ You might see `WARNING: Using incubator modules: jdk.incubator.foreign, jdk.incu
 Saves the list of modified files to `report.txt` in the folder you ran the command from. Without `-n`, it lists the matched files instead.
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --report report.txt
 ```
 
@@ -229,11 +243,13 @@ Saves the list of modified files to `report.txt` in the folder you ran the comma
 Copies the originals into a new timestamped folder under `./backups` on your machine before changing them. The log shows `/work/backups/...` because that's the path inside the container.
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --archive ./backups
 ```
 
 #### 7. Everything together
 
 ```bash
+./setup-test-env.sh
 ./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --archive ./backups --report report.txt
 ```
