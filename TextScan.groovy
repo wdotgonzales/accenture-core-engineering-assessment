@@ -17,9 +17,10 @@ import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
 
 /**
- * Text find-and-replace tool. Looks through a folder and its subfolders for a word or
- * regex pattern, replaces every occurrence with a new string, and can optionally back up
- * the original files first and write a report listing the files that were modified.
+ * Text search and replace tool. Looks through a folder and its subfolders for a word or
+ * regex pattern and prints every hit. If a new text is given (-n), it also replaces every
+ * occurrence. Can optionally copy the matched files into a backup folder first and write
+ * a report. Without -n, no file is ever modified.
  */
 class TextScan {
     // Always read and write files as UTF-8 so character encoding doesn't break
@@ -31,8 +32,9 @@ class TextScan {
 
     String rootDir
     String pattern
-    String newText          // text as the user typed it (used for logging)
+    String newText          // null when -n was not given (search only)
     String replacement      // text as passed to Matcher.replaceAll (escaped in literal mode)
+    boolean replaceMode     // true only when -n was given
     boolean regex
     String reportFile
     String archiveDir
@@ -44,8 +46,8 @@ class TextScan {
     int extraErrors = 0
 
     /**
-     * Main run method. Checks inputs, scans files, backs up originals, replaces text,
-     * and handles optional report generation.
+     * Main run method. Checks inputs, scans files, backs up originals, replaces text
+     * (only when -n was given), and handles optional report generation.
      */
     boolean run() {
         Instant start = Instant.now()
@@ -63,17 +65,21 @@ class TextScan {
             return false
         }
 
-        log('INFO', "Start: replacing \"${pattern}\" with \"${newText}\" in ${rootDir} (${regex ? 'regex' : 'literal'} mode)")
+        if (replaceMode) {
+            log('INFO', "Start: replacing \"${pattern}\" with \"${newText}\" in ${rootDir} (${regex ? 'regex' : 'literal'} mode)")
+        } else {
+            log('INFO', "Start: searching for \"${pattern}\" in ${rootDir} (${regex ? 'regex' : 'literal'} mode)")
+        }
 
         // Find matches and print them
         List results = scan()
         report(results)
 
-        // Back up the originals BEFORE touching them, then replace the text
+        // Back up the originals BEFORE touching them, then replace the text (only if -n was given)
         if (archiveDir) { archive(results) }
-        replaceFiles(results)
+        if (replaceMode) { replaceFiles(results) }
 
-        // Write the list of modified files if requested
+        // Write the list of modified (or matched) files if requested
         if (reportFile) { writeReport(results) }
 
         // Print final summary and elapsed time
@@ -185,7 +191,8 @@ class TextScan {
     }
 
     /**
-     * Writes the list of modified files to the report file using a temp file for safety.
+     * Writes the report file using a temp file for safety. In replace mode it lists the
+     * modified files; in search-only mode it lists the matched files.
      */
     void writeReport(List results) {
         Path target = Paths.get(reportFile).toAbsolutePath().normalize()
@@ -195,16 +202,19 @@ class TextScan {
             temp = Files.createTempFile(target.parent, '.textscan-', '.tmp')
 
             String nl = System.lineSeparator()
-            List modified = results.findAll { it.modified }
+            // Replace mode lists modified files; search-only mode lists matched files
+            List listed = replaceMode ? results.findAll { it.modified }
+                                      : results.findAll { it.hits && !it.error }
+            String unit = replaceMode ? 'replacement' : 'hit'
             temp.toFile().withWriter(CHARSET) { Writer w ->
                 w << "TextScan report${nl}"
                 w << "Folder: ${rootDir}${nl}"
                 w << "Pattern: ${pattern} (${regex ? 'regex' : 'literal'})${nl}"
-                w << "Replaced with: ${newText}${nl}"
+                if (replaceMode) { w << "Replaced with: ${newText}${nl}" }
                 w << "Generated: ${LocalDateTime.now().format(LOG_TIME)}${nl}"
-                w << "Files modified: ${modified.size()}${nl}${nl}"
-                modified.each { r ->
-                    w << "${r.file}\t${r.hits} ${plural(r.hits, 'replacement')}\t${lineLabel(r.lines)}${nl}"
+                w << "${replaceMode ? 'Files modified' : 'Files matched'}: ${listed.size()}${nl}${nl}"
+                listed.each { r ->
+                    w << "${r.file}\t${r.hits} ${plural(r.hits, unit)}\t${lineLabel(r.lines)}${nl}"
                 }
             }
 
@@ -358,19 +368,25 @@ class TextScan {
     }
 
     /**
-     * Prints a summary of files scanned, matched, modified, and total errors.
+     * Prints a summary of files scanned, matched, modified (replace mode) or hits (search mode),
+     * and total errors.
      */
     void summary(List results) {
         int scanned = results.size()
         int matched = results.count { it.hits }
         int modified = results.count { it.modified }
         int replaced = results.sum(0) { it.modified ? it.hits : 0 }
+        int hits = results.sum(0) { it.hits }
         int errors = results.count { it.error } + extraErrors
 
-        log(errors ? 'WARN' : 'INFO',
-            "Summary: ${scanned} ${plural(scanned, 'file')} scanned, ${matched} matched, " +
-            "${modified} modified, ${replaced} ${plural(replaced, 'replacement')}, " +
-            "${errors} ${plural(errors, 'error')}")
+        String text = "Summary: ${scanned} ${plural(scanned, 'file')} scanned, ${matched} matched"
+        if (replaceMode) {
+            text += ", ${modified} modified, ${replaced} ${plural(replaced, 'replacement')}"
+        } else {
+            text += ", ${hits} ${plural(hits, 'hit')}"
+        }
+        text += ", ${errors} ${plural(errors, 'error')}"
+        log(errors ? 'WARN' : 'INFO', text)
     }
 
     /**
@@ -402,13 +418,13 @@ class TextScan {
      * Entry point. Parses arguments using Picocli and starts the run.
      */
     static void main(String[] args) {
-        def cli = new CliBuilder(usage: 'groovy TextScan.groovy -d <directory> -p <pattern> -n <new text> [options]')
+        def cli = new CliBuilder(usage: 'groovy TextScan.groovy -d <directory> -p <pattern> [-n <new text>] [options]')
         cli.d(names: ['-d', '--dir'], args: 1, required: true, argName: 'directory', 'Folder to scan')
         cli.p(names: ['-p', '--pattern'], args: 1, required: true, argName: 'pattern', 'Text to search for')
-        cli.n(names: ['-n', '--new'], args: 1, required: true, argName: 'new text', 'Text that replaces every match')
+        cli.n(names: ['-n', '--new'], args: 1, argName: 'new text', 'Optional. Text that replaces every match (omit to only search)')
         cli.r(names: ['-r', '--regex'], 'Treat the pattern as a regular expression (new text may use $1, $2...)')
-        cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of modified files to this file')
-        cli._(names: ['--archive'], args: 1, argName: 'directory', 'Back up original files into this folder before replacing')
+        cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of modified (or matched) files to this file')
+        cli._(names: ['--archive'], args: 1, argName: 'directory', 'Copy matched files into this folder (before replacing, if -n is used)')
         cli.h(names: ['-h', '--help'], usageHelp: true, 'Show this help and exit')
 
         def options = cli.parse(args)
@@ -420,7 +436,9 @@ class TextScan {
         }
 
         boolean asRegex = options.r ? true : false
-        String newText = options.n == null ? '' : options.n.toString()
+        // A missing -n does not come back as a String, a given -n (even "") does
+        boolean replaceMode = options.n instanceof String
+        String newText = replaceMode ? options.n.toString() : null
 
         Pattern compiled
         try {
@@ -442,8 +460,9 @@ class TextScan {
             rootDir: options.d,
             pattern: options.p,
             newText: newText,
+            replaceMode: replaceMode,
             // Literal mode: treat '$' and '\' in the new text as plain characters
-            replacement: asRegex ? newText : Matcher.quoteReplacement(newText),
+            replacement: !replaceMode ? null : (asRegex ? newText : Matcher.quoteReplacement(newText)),
             regex: asRegex,
             reportFile: options.report ?: null,
             archiveDir: options.archive ?: null,
