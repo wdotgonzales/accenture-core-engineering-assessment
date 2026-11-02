@@ -1,6 +1,6 @@
 # TextScan
 
-A command-line tool that scans a folder tree for a word or regex pattern and prints each hit (file, line, column, preview). It can also write a report file and copy matched files into a timestamped archive. It never modifies the files it scans.
+A command-line tool that finds a word or regex pattern in the `.txt` files of a folder tree and **replaces every occurrence with new text**. Each hit is printed (file, line, column, preview). It can also back up the original files before changing them and write a report listing the files that were modified.
 
 ## Clone the code, go to its directory and make the bash scripts executable
 
@@ -16,19 +16,32 @@ chmod +x setup-test-env.sh textscan-docker.sh
 
 ## Options
 
-| Option | Description |
-| :--- | :--- |
-| `-d`, `--dir` | **(Required)** Folder to scan. |
-| `-p`, `--pattern` | **(Required)** Text or regex to search for. |
-| `-r`, `--regex` | Treat the pattern as a regular expression. |
-| `--report <file>` | Write matched files to a report file. |
-| `--archive <dir>` | Copy matched files into a timestamped folder under `<dir>`. |
-| `-h`, `--help` | Show help. |
+| Option            | Description                                                                                          |
+| :---------------- | :--------------------------------------------------------------------------------------------------- |
+| `-d`, `--dir`     | **(Required)** Folder to search. Subfolders are included.                                            |
+| `-p`, `--pattern` | **(Required)** Text or regex to search for.                                                          |
+| `-n`, `--new`     | **(Required)** Text that replaces every match. Use `""` to delete the matches.                       |
+| `-r`, `--regex`   | Treat the pattern as a regular expression. The new text can then use group references (`$1`, `$2`).  |
+| `--report <file>` | Write the list of modified files (with replacement counts and line numbers) to a file.               |
+| `--archive <dir>` | Copy the original files into a timestamped folder under `<dir>` **before** they are modified.        |
+| `-h`, `--help`    | Show help.                                                                                           |
 
-## Scan Behavior
+All values come from the command line. Nothing is hardcoded.
 
-- Only `.txt` files are scanned.
+## Scan and Replace Behavior
+
+- **Files are modified in place.** Use `--archive` if you want a copy of the originals.
+- Only `.txt` files are processed, in the given folder and all its subfolders.
 - Hidden files and folders (names starting with `.`) and symbolic links are skipped.
+- The report file and the archive folder are never scanned, even if they sit inside the scanned folder.
+- In literal mode, `$` and `\` in the new text are plain characters. In regex mode, `$1`, `$2`, and so on refer to capture groups.
+- Line endings (`\n` or `\r\n`) are kept as they were.
+- Files are read and written as UTF-8.
+- Each file is written to a temporary file first and then moved over the original, so a crash can't leave a half-written file.
+- If `--archive` is used and a file's backup fails, that file is **not** modified.
+- Empty-matching patterns (for example `a*`) are rejected.
+
+Each run logs the start time, every match (file, line, column), each modified file, any errors, a summary, and the end time with the elapsed duration.
 
 ---
 
@@ -40,12 +53,12 @@ chmod +x setup-test-env.sh textscan-docker.sh
 
 Skip this step if `java -version` already shows version 8 or higher.
 
-| OS | Command |
-| :--- | :--- |
-| Windows | `choco install temurin17` or `winget install EclipseAdoptium.Temurin.17.JDK` |
-| macOS | `brew install --cask temurin@17` |
-| Linux (Debian/Ubuntu) | `sudo apt update && sudo apt install openjdk-17-jdk` |
-| Linux (any distro) | `sdk install java` ([SDKMAN](https://sdkman.io/)) |
+| OS                    | Command                                                                      |
+| :-------------------- | :--------------------------------------------------------------------------- |
+| Windows               | `choco install temurin17` or `winget install EclipseAdoptium.Temurin.17.JDK` |
+| macOS                 | `brew install --cask temurin@17`                                             |
+| Linux (Debian/Ubuntu) | `sudo apt update && sudo apt install openjdk-17-jdk`                         |
+| Linux (any distro)    | `sdk install java` ([SDKMAN](https://sdkman.io/))                            |
 
 Reopen your terminal, then check the install:
 
@@ -53,17 +66,13 @@ Reopen your terminal, then check the install:
 java -version
 ```
 
-You should see a version of 8 or higher (for example, `openjdk version "17.0.x"`).
-
-> You can also download a JDK installer directly from [Adoptium](https://adoptium.net/).
-
 ### Step 2: Install Groovy
 
-| OS | Command |
-| :--- | :--- |
-| Windows | `choco install groovy` or `scoop install groovy` |
-| macOS | `brew install groovy` |
-| Linux | `sdk install groovy` ([SDKMAN](https://sdkman.io/)) or `sudo apt install groovy` |
+| OS      | Command                                                                          |
+| :------ | :------------------------------------------------------------------------------- |
+| Windows | `choco install groovy` or `scoop install groovy`                                 |
+| macOS   | `brew install groovy`                                                            |
+| Linux   | `sdk install groovy` ([SDKMAN](https://sdkman.io/)) or `sudo apt install groovy` |
 
 Reopen your terminal, then check the install:
 
@@ -77,60 +86,74 @@ groovy --version
 ./setup-test-env.sh
 ```
 
-This creates `testscan_dir` with the following structure. Running the script again deletes and recreates the folder.
+This creates `testscan_dir` with the following structure. Running the script again deletes and recreates the folder, which is how you reset the test files after a replace.
 
 ```
 testscan_dir/
-├── file1.txt                  <- scanned (2 hits for "Hello")
+├── file1.txt                  <- processed (2 hits for "Hello")
 ├── app.log                    <- ignored (not a .txt file)
 ├── .hidden.txt                <- ignored (hidden file)
 ├── .hidden_folder/            <- ignored (hidden folder)
 │   └── secret.txt
 ├── subdir/
-│   └── file2.txt              <- scanned (2 hits for "Hello")
+│   └── file2.txt              <- processed (2 hits for "Hello")
 └── nested/
     └── deep/
-        └── file3.txt          <- scanned (1 hit for "Hello")
+        └── file3.txt          <- processed (1 hit for "Hello")
 ```
 
-### Step 4: Run the scanner
+### Step 4: Run the tool
 
 ```bash
-groovy TextScan.groovy -d <directory> -p <pattern> [options]
+groovy TextScan.groovy -d <directory> -p <pattern> -n <new text> [options]
 ```
 
 Timestamps and the elapsed time in the output will be different on every run.
 
-#### 1. Literal search
+> The test files are changed by every example below. Run `./setup-test-env.sh` again to reset them before trying the next one.
 
-Looks for the exact word `Hello` in every `.txt` file under `testscan_dir`. You should get 5 hits across 3 files.
+#### 1. Literal replace
+
+Replaces every `Hello` in every `.txt` file under `testscan_dir` with `Hi`. You should get 5 replacements across 3 files.
 
 ```bash
-groovy TextScan.groovy -d testscan_dir -p "Hello"
+groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi"
 ```
 
-#### 2. Regex search
+#### 2. Regex replace
 
-Same search, but with `-r` so the pattern is read as a regex. `H[a-z]+` matches any word starting with `H` followed by lowercase letters, which here is still just `Hello`, so the results are the same as the literal search.
+Same replacement, but with `-r` so the pattern is read as a regex. `H[a-z]+` matches any word starting with `H` followed by lowercase letters, which here is still just `Hello`.
 
 ```bash
-groovy TextScan.groovy -d testscan_dir -p "H[a-z]+" -r
+groovy TextScan.groovy -d testscan_dir -p "H[a-z]+" -r -n "Hi"
+```
+
+With a capture group (use single quotes so the shell doesn't expand `$1`). This turns `Hello` into `Hi`:
+
+```bash
+groovy TextScan.groovy -d testscan_dir -p "(H)ello" -r -n '$1i'
 ```
 
 #### 3. Report
 
-Runs the same scan and also saves the matched files, with their hit counts and line numbers, to `report.txt`.
+Runs the replace and saves the modified files, with their replacement counts and line numbers, to `report.txt`.
 
 ```bash
-groovy TextScan.groovy -d testscan_dir -p "Hello" --report report.txt
+groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --report report.txt
 ```
 
-#### 4. Archive
+#### 4. Backup
 
-Runs the same scan and also copies the matched files into a new timestamped folder under `./backups`, keeping their folder structure. Every run makes a new folder, so older backups are never overwritten.
+Copies the original files into a new timestamped folder under `./backups` (keeping their folder structure) before changing them. Every run makes a new folder, so older backups are never overwritten.
 
 ```bash
-groovy TextScan.groovy -d testscan_dir -p "Hello" --archive ./backups
+groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --archive ./backups
+```
+
+#### 5. Everything together
+
+```bash
+groovy TextScan.groovy -d testscan_dir -p "Hello" -n "Hi" --archive ./backups --report report.txt
 ```
 
 ---
@@ -147,44 +170,46 @@ groovy TextScan.groovy -d testscan_dir -p "Hello" --archive ./backups
 
 This creates the same `testscan_dir` structure shown in Option 1.
 
-### Step 2: Run the scanner
+### Step 2: Run the tool
 
 ```bash
-./textscan-docker.sh -d <directory> -p <pattern> [options]
+./textscan-docker.sh -d <directory> -p <pattern> -n <new text> [options]
 ```
 
-The first run builds the image, which takes about a minute. After that it starts right away. Your current folder is mounted into the container, so paths are relative to where you run the command, and any reports or archives show up on your machine.
+The first run builds the image, which takes about a minute. After that it starts right away. Your current folder is mounted into the container, so paths are relative to where you run the command, and any modified files, reports, or backups show up on your machine.
 
 You might see `WARNING: Using incubator modules: jdk.incubator.foreign, jdk.incubator.vector` before the output. It's harmless and comes from the Java version inside the image.
 
-#### 1. Literal search
-
-Looks for the exact word `Hello` in every `.txt` file under `testscan_dir`. You should get 5 hits across 3 files.
+#### 1. Literal replace
 
 ```bash
-./textscan-docker.sh -d testscan_dir -p "Hello"
+./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi"
 ```
 
-#### 2. Regex search
-
-Same search with `-r`, so `H[a-z]+` is treated as a regex. It still only matches `Hello` in the test files, so the results are the same.
+#### 2. Regex replace
 
 ```bash
-./textscan-docker.sh -d testscan_dir -p "H[a-z]+" -r
+./textscan-docker.sh -d testscan_dir -p "H[a-z]+" -r -n "Hi"
 ```
 
 #### 3. Report
 
-Runs the same scan and saves the matched files to `report.txt` in the folder you ran the command from.
+Saves the list of modified files to `report.txt` in the folder you ran the command from.
 
 ```bash
-./textscan-docker.sh -d testscan_dir -p "Hello" --report report.txt
+./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --report report.txt
 ```
 
-#### 4. Archive
+#### 4. Backup
 
-Runs the same scan and copies the matched files into a new timestamped folder under `./backups` on your machine. The log shows `/work/backups/...` because that's the path inside the container.
+Copies the originals into a new timestamped folder under `./backups` on your machine before changing them. The log shows `/work/backups/...` because that's the path inside the container.
 
 ```bash
-./textscan-docker.sh -d testscan_dir -p "Hello" --archive ./backups
+./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --archive ./backups
+```
+
+#### 5. Everything together
+
+```bash
+./textscan-docker.sh -d testscan_dir -p "Hello" -n "Hi" --archive ./backups --report report.txt
 ```

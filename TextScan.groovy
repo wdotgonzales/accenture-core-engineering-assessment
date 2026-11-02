@@ -17,23 +17,26 @@ import java.util.regex.Pattern
 import java.util.regex.PatternSyntaxException
 
 /**
- * Text scanner that looks through a folder and its subfolders for a word or regex pattern,
- * prints the matches, and can optionally save a report file or backup archive.
+ * Text find-and-replace tool. Looks through a folder and its subfolders for a word or
+ * regex pattern, replaces every occurrence with a new string, and can optionally back up
+ * the original files first and write a report listing the files that were modified.
  */
 class TextScan {
-    // Always read files as UTF-8 so character encoding doesn't break
+    // Always read and write files as UTF-8 so character encoding doesn't break
     static final String CHARSET = 'UTF-8'
-    
+
     // Date formats for logs and archive folders
     static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm:ss.SSS')
     static final DateTimeFormatter FOLDER_TIME = DateTimeFormatter.ofPattern('yyyyMMdd-HHmmss')
 
     String rootDir
     String pattern
+    String newText          // text as the user typed it (used for logging)
+    String replacement      // text as passed to Matcher.replaceAll (escaped in literal mode)
     boolean regex
     String reportFile
     String archiveDir
-    
+
     // Compile the pattern once so we don't recompile it for every file/line
     Pattern compiledPattern
 
@@ -41,8 +44,8 @@ class TextScan {
     int extraErrors = 0
 
     /**
-     * Main run method. Checks inputs, scans files, prints results,
-     * and handles optional report generation and archiving.
+     * Main run method. Checks inputs, scans files, backs up originals, replaces text,
+     * and handles optional report generation.
      */
     boolean run() {
         Instant start = Instant.now()
@@ -60,15 +63,18 @@ class TextScan {
             return false
         }
 
-        log('INFO', "Start: scanning ${rootDir} for \"${pattern}\" (${regex ? 'regex' : 'literal'} mode)")
+        log('INFO', "Start: replacing \"${pattern}\" with \"${newText}\" in ${rootDir} (${regex ? 'regex' : 'literal'} mode)")
 
-        // Scan files and print report
+        // Find matches and print them
         List results = scan()
         report(results)
 
-        // Write report or archive if requested
-        if (reportFile) { writeReport(results) }
+        // Back up the originals BEFORE touching them, then replace the text
         if (archiveDir) { archive(results) }
+        replaceFiles(results)
+
+        // Write the list of modified files if requested
+        if (reportFile) { writeReport(results) }
 
         // Print final summary and elapsed time
         summary(results)
@@ -77,7 +83,7 @@ class TextScan {
     }
 
     /**
-     * Compiles search text into a Pattern. 
+     * Compiles search text into a Pattern.
      * Uses Pattern.quote for literal mode so special characters don't break regex.
      */
     static Pattern buildPattern(String text, boolean asRegex) {
@@ -120,7 +126,66 @@ class TextScan {
     }
 
     /**
-     * Writes matched file details to the report file using a temp file for safety.
+     * Replaces every match in each matched file. If a backup folder was requested, a file is
+     * only modified when its original was backed up successfully.
+     */
+    void replaceFiles(List results) {
+        Path root = Paths.get(rootDir).toAbsolutePath().normalize()
+
+        results.findAll { it.hits && !it.error }.each { r ->
+            if (archiveDir && !r.backedUp) {
+                // Never overwrite a file we promised to back up but couldn't
+                r.error = 'skipped, original could not be backed up'
+                log('ERROR', "${r.file} -> not modified (backup failed)")
+                return
+            }
+            try {
+                replaceInFile(root.resolve(r.relPath))
+                r.modified = true
+                log('INFO', "Modified ${r.file}: ${r.hits} ${plural(r.hits, 'replacement')}")
+            } catch (Exception e) {
+                r.error = e.message ?: e.class.simpleName
+                log('ERROR', "Could not modify ${r.file}: ${r.error}")
+            }
+        }
+    }
+
+    /**
+     * Rewrites one file with the replacement applied. The new content goes to a temp file in
+     * the same folder first, then replaces the original, so a crash can't leave a half-written file.
+     * Works line by line so line endings (\n or \r\n) are kept exactly as they were.
+     */
+    void replaceInFile(Path file) {
+        String content = new String(Files.readAllBytes(file), CHARSET)
+        StringBuilder out = new StringBuilder(content.length())
+
+        // Split after every \n so each piece keeps its own line ending
+        content.split('(?<=\n)', -1).each { String segment ->
+            String eol = segment.endsWith('\r\n') ? '\r\n' : (segment.endsWith('\n') ? '\n' : '')
+            String body = segment.substring(0, segment.length() - eol.length())
+            out << compiledPattern.matcher(body).replaceAll(replacement) << eol
+        }
+
+        Path temp = Files.createTempFile(file.parent, '.textscan-', '.tmp')
+        try {
+            Files.write(temp, out.toString().getBytes(CHARSET))
+            // Keep the original file permissions when the file system supports it
+            try {
+                Files.setPosixFilePermissions(temp, Files.getPosixFilePermissions(file))
+            } catch (Exception ignored) { /* non-POSIX file system, keep defaults */ }
+
+            try {
+                Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
+
+    /**
+     * Writes the list of modified files to the report file using a temp file for safety.
      */
     void writeReport(List results) {
         Path target = Paths.get(reportFile).toAbsolutePath().normalize()
@@ -130,13 +195,16 @@ class TextScan {
             temp = Files.createTempFile(target.parent, '.textscan-', '.tmp')
 
             String nl = System.lineSeparator()
+            List modified = results.findAll { it.modified }
             temp.toFile().withWriter(CHARSET) { Writer w ->
                 w << "TextScan report${nl}"
                 w << "Folder: ${rootDir}${nl}"
                 w << "Pattern: ${pattern} (${regex ? 'regex' : 'literal'})${nl}"
-                w << "Generated: ${LocalDateTime.now().format(LOG_TIME)}${nl}${nl}"
-                results.findAll { it.hits }.each { r ->
-                    w << "${r.file}\t${r.hits} ${plural(r.hits, 'hit')}\t${lineLabel(r.lines)}${nl}"
+                w << "Replaced with: ${newText}${nl}"
+                w << "Generated: ${LocalDateTime.now().format(LOG_TIME)}${nl}"
+                w << "Files modified: ${modified.size()}${nl}${nl}"
+                modified.each { r ->
+                    w << "${r.file}\t${r.hits} ${plural(r.hits, 'replacement')}\t${lineLabel(r.lines)}${nl}"
                 }
             }
 
@@ -154,12 +222,13 @@ class TextScan {
     }
 
     /**
-     * Copies matched files into a timestamped folder, preserving folder structure.
+     * Copies the ORIGINAL matched files into a timestamped folder, preserving folder structure.
+     * Marks each successfully copied file so replaceFiles knows it is safe to modify.
      */
     void archive(List results) {
-        List matched = results.findAll { it.hits }
+        List matched = results.findAll { it.hits && !it.error }
         if (!matched) {
-            log('INFO', 'Archive skipped: no matched files to copy.')
+            log('INFO', 'Backup skipped: no matched files to copy.')
             return
         }
 
@@ -172,13 +241,14 @@ class TextScan {
                 Path target = runFolder.resolve(r.relPath)
                 Files.createDirectories(target.parent)
                 Files.copy(root.resolve(r.relPath), target, StandardCopyOption.COPY_ATTRIBUTES)
+                r.backedUp = true
                 copied++
             } catch (Exception e) {
                 extraErrors++
-                log('ERROR', "Could not archive ${r.file}: ${e.message}")
+                log('ERROR', "Could not back up ${r.file}: ${e.message}")
             }
         }
-        log('INFO', "Archived ${copied} ${plural(copied, 'file')} to ${runFolder}")
+        log('INFO', "Backed up ${copied} ${plural(copied, 'file')} to ${runFolder}")
     }
 
     /**
@@ -224,7 +294,8 @@ class TextScan {
     }
 
     /**
-     * Walks through the directory tree to find text files while ignoring hidden files, symlinks, and reports.
+     * Walks through the directory tree to find text files while ignoring hidden files, symlinks,
+     * the report file and the backup folder.
      */
     List scan() {
         Path root = Paths.get(rootDir).toAbsolutePath().normalize()
@@ -254,7 +325,8 @@ class TextScan {
 
         return files.collect { File file ->
             Path relPath = root.relativize(file.toPath().toAbsolutePath().normalize())
-            Map result = [file: relPath.toString(), relPath: relPath, hits: 0, lines: [], error: null]
+            Map result = [file: relPath.toString(), relPath: relPath, hits: 0, lines: [],
+                          error: null, backedUp: false, modified: false]
 
             try {
                 Map found = searchFile(file)
@@ -286,17 +358,19 @@ class TextScan {
     }
 
     /**
-     * Prints a summary of files scanned, matches found, and total errors.
+     * Prints a summary of files scanned, matched, modified, and total errors.
      */
     void summary(List results) {
         int scanned = results.size()
         int matched = results.count { it.hits }
-        int totalHits = results.sum(0) { it.hits }
+        int modified = results.count { it.modified }
+        int replaced = results.sum(0) { it.modified ? it.hits : 0 }
         int errors = results.count { it.error } + extraErrors
 
         log(errors ? 'WARN' : 'INFO',
             "Summary: ${scanned} ${plural(scanned, 'file')} scanned, ${matched} matched, " +
-            "${totalHits} total ${plural(totalHits, 'hit')}, ${errors} ${plural(errors, 'error')}")
+            "${modified} modified, ${replaced} ${plural(replaced, 'replacement')}, " +
+            "${errors} ${plural(errors, 'error')}")
     }
 
     /**
@@ -325,15 +399,16 @@ class TextScan {
     }
 
     /**
-     * Entry point. Parses arguments using Picocli and starts the scan.
+     * Entry point. Parses arguments using Picocli and starts the run.
      */
     static void main(String[] args) {
-        def cli = new CliBuilder(usage: 'groovy TextScan.groovy -d <directory> -p <pattern> [options]')
+        def cli = new CliBuilder(usage: 'groovy TextScan.groovy -d <directory> -p <pattern> -n <new text> [options]')
         cli.d(names: ['-d', '--dir'], args: 1, required: true, argName: 'directory', 'Folder to scan')
         cli.p(names: ['-p', '--pattern'], args: 1, required: true, argName: 'pattern', 'Text to search for')
-        cli.r(names: ['-r', '--regex'], 'Treat the pattern as a regular expression')
-        cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of matched files to this file')
-        cli._(names: ['--archive'], args: 1, argName: 'directory', 'Copy matched files into this folder')
+        cli.n(names: ['-n', '--new'], args: 1, required: true, argName: 'new text', 'Text that replaces every match')
+        cli.r(names: ['-r', '--regex'], 'Treat the pattern as a regular expression (new text may use $1, $2...)')
+        cli._(names: ['--report'], args: 1, argName: 'file', 'Write the list of modified files to this file')
+        cli._(names: ['--archive'], args: 1, argName: 'directory', 'Back up original files into this folder before replacing')
         cli.h(names: ['-h', '--help'], usageHelp: true, 'Show this help and exit')
 
         def options = cli.parse(args)
@@ -344,9 +419,12 @@ class TextScan {
             System.exit(0)
         }
 
+        boolean asRegex = options.r ? true : false
+        String newText = options.n == null ? '' : options.n.toString()
+
         Pattern compiled
         try {
-            compiled = buildPattern(options.p, options.regex)
+            compiled = buildPattern(options.p, asRegex)
         } catch (PatternSyntaxException e) {
             System.err.println "Error: invalid regex '${options.p}': ${e.description}"
             cli.usage()
@@ -363,7 +441,10 @@ class TextScan {
         TextScan textScan = new TextScan(
             rootDir: options.d,
             pattern: options.p,
-            regex: options.regex ?: false,
+            newText: newText,
+            // Literal mode: treat '$' and '\' in the new text as plain characters
+            replacement: asRegex ? newText : Matcher.quoteReplacement(newText),
+            regex: asRegex,
             reportFile: options.report ?: null,
             archiveDir: options.archive ?: null,
             compiledPattern: compiled
