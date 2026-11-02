@@ -28,21 +28,6 @@ chmod +x setup-test-env.sh textscan-docker.sh
 
 All values come from the command line. Nothing is hardcoded.
 
-## Scan and Replace Behavior
-
-- **Files are modified in place.** Use `--archive` if you want a copy of the originals.
-- Only `.txt` files are processed, in the given folder and all its subfolders.
-- Hidden files and folders (names starting with `.`) and symbolic links are skipped.
-- The report file and the archive folder are never scanned, even if they sit inside the scanned folder.
-- In literal mode, `$` and `\` in the new text are plain characters. In regex mode, `$1`, `$2`, and so on refer to capture groups.
-- Line endings (`\n` or `\r\n`) are kept as they were.
-- Files are read and written as UTF-8.
-- Each file is written to a temporary file first and then moved over the original, so a crash can't leave a half-written file.
-- If `--archive` is used and a file's backup fails, that file is **not** modified.
-- Empty-matching patterns (for example `a*`) are rejected.
-
-Each run logs the start time, every match (file, line, column), each modified file, any errors, a summary, and the end time with the elapsed duration.
-
 ---
 
 ## Option 1: Run with Groovy
