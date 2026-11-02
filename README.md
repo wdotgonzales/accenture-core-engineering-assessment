@@ -36,7 +36,28 @@ chmod +x setup-test-env.sh textscan-docker.sh
 
 **Requirements:** JDK 8+, Groovy 2.5+, and internet on the first run (to download Picocli).
 
-### Step 1: Install Groovy
+### Step 1: Install Java (JDK)
+
+Skip this step if `java -version` already shows version 8 or higher.
+
+| OS | Command |
+| :--- | :--- |
+| Windows | `choco install temurin17` or `winget install EclipseAdoptium.Temurin.17.JDK` |
+| macOS | `brew install --cask temurin@17` |
+| Linux (Debian/Ubuntu) | `sudo apt update && sudo apt install openjdk-17-jdk` |
+| Linux (any distro) | `sdk install java` ([SDKMAN](https://sdkman.io/)) |
+
+Reopen your terminal, then check the install:
+
+```bash
+java -version
+```
+
+You should see a version of 8 or higher (for example, `openjdk version "17.0.x"`).
+
+> You can also download a JDK installer directly from [Adoptium](https://adoptium.net/).
+
+### Step 2: Install Groovy
 
 | OS | Command |
 | :--- | :--- |
@@ -47,11 +68,10 @@ chmod +x setup-test-env.sh textscan-docker.sh
 Reopen your terminal, then check the install:
 
 ```bash
-java -version
 groovy --version
 ```
 
-### Step 2: Create the test folders
+### Step 3: Create the test folders
 
 ```bash
 ./setup-test-env.sh
@@ -73,7 +93,7 @@ testscan_dir/
         └── file3.txt          <- scanned (1 hit for "Hello")
 ```
 
-### Step 3: Run the scanner
+### Step 4: Run the scanner
 
 ```bash
 groovy TextScan.groovy -d <directory> -p <pattern> [options]
